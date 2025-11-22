@@ -185,51 +185,418 @@ Internal IP: 10.x.x.x
 
 ## 4. Configure Firewall Rules
 
-### 4.1 Navigate to Firewall
+### 4.1 Understanding Network Tags and Firewall Rules
 
-1. In the left sidebar: **"VPC network"** → **"Firewall"**
-2. Click **"CREATE FIREWALL RULE"**
+**CRITICAL CONCEPT: What are Network Tags?**
 
-### 4.2 Create DNS Firewall Rule
+Network tags are labels you attach to VMs that firewall rules use to determine which VMs they apply to.
 
-We need to allow DNS traffic (port 53) for Evilginx3:
+**How it works:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    FIREWALL RULE                            │
+│  Name: allow-dns                                            │
+│  Ports: 53 (TCP/UDP)                                        │
+│  Target: VMs with tag "evilgophish" ──┐                     │
+└──────────────────────────────────────┼─────────────────────┘
+                                       │
+                  ┌────────────────────┘
+                  │   TAG MATCHING
+                  ▼
+┌────────────────────────────────┐  ┌───────────────────────┐
+│   VM: evilgophish-server       │  │  VM: other-server     │
+│   Tags: [evilgophish]          │  │  Tags: []             │
+│   Status: ✓ Rule APPLIES       │  │  Status: ✗ Rule SKIPS │
+│   Port 53: OPEN                │  │  Port 53: BLOCKED     │
+└────────────────────────────────┘  └───────────────────────┘
+```
 
-**Basic Configuration:**
-- Name: `allow-dns`
-- Description: `Allow DNS traffic for Evilginx3`
-- Network: `default`
-- Priority: `1000`
-- Direction: `Ingress`
-- Action: `Allow`
+**Why do we need this?**
+- GCP firewall rules can target ALL VMs or SPECIFIC VMs with matching tags
+- By using tags, we only open port 53 (DNS) on our phishing server, not every VM in the project
+- This is more secure than opening ports on all VMs
 
-**Targets:**
-- Target tags: `evilgophish`
+**What happens if you skip network tags?**
+- The firewall rule exists but applies to NO VMs
+- Port 53 will be BLOCKED
+- Evilginx3 DNS server will FAIL
+- Your phishing setup will NOT WORK
 
-**Source filter:**
-- Source IPv4 ranges: `0.0.0.0/0`
+### 4.2 Navigate to Firewall
 
-**Protocols and ports:**
-- Select **"Specified protocols and ports"**
-- Check **TCP**: `53`
-- Check **UDP**: `53`
+1. In the GCP Console top-left, click the **hamburger menu** (three horizontal lines)
+2. Scroll down to **"VPC network"** section
+3. Click **"Firewall"**
+4. You'll see existing firewall rules like:
+   - `default-allow-http`
+   - `default-allow-https`
+   - `default-allow-internal`
+   - `default-allow-rdp`
+   - `default-allow-ssh`
 
-Click **"CREATE"**
+### 4.3 Create DNS Firewall Rule
 
-### 4.3 Add Network Tag to VM
+**Why this rule is needed:**
+- Evilginx3 runs its own DNS server on port 53 (both TCP and UDP)
+- Without this rule, external clients cannot query your DNS server
+- The default GCP firewall blocks all ports except those explicitly allowed
+
+**Step-by-step creation:**
+
+1. Click **"CREATE FIREWALL RULE"** button at the top
+2. You'll see a form with many fields - fill them EXACTLY as follows:
+
+#### Name and Description
+```
+Name: allow-dns
+Description: Allow DNS traffic for Evilginx3 MITM proxy
+```
+
+**Why this name?** Descriptive and follows GCP naming convention.
+
+#### Logs
+```
+Logs: Off (default)
+```
+
+**Note:** You can enable logs later for debugging if needed.
+
+#### Network
+```
+Network: default
+```
+
+**Explanation:** This is the VPC network. Unless you created custom networks, use `default`.
+
+#### Priority
+```
+Priority: 1000
+```
+
+**Explanation:** Lower numbers = higher priority. 1000 is default and works fine.
+
+#### Direction of traffic
+```
+Direction: Ingress
+```
+
+**Explanation:** "Ingress" = incoming traffic TO your VM. This is what we want.
+
+#### Action on match
+```
+Action: Allow
+```
+
+**Explanation:** When traffic matches this rule, ALLOW it through.
+
+#### Targets
+**THIS IS THE CRITICAL PART - READ CAREFULLY:**
+
+```
+Targets: Specified target tags
+Target tags: evilgophish
+```
+
+**STEP BY STEP:**
+1. Click the dropdown that says "All instances in the network"
+2. Select **"Specified target tags"**
+3. A text field appears labeled "Target tags"
+4. Type: `evilgophish` (lowercase, no spaces)
+5. Press Enter or click outside the field
+
+**Visual confirmation:**
+You should see a blue pill/bubble with the text "evilgophish" appear.
+
+```
+Target tags: [evilgophish]
+             ↑ This blue bubble confirms the tag is set
+```
+
+**What this means:**
+This firewall rule will ONLY apply to VMs that have the tag "evilgophish".
+Right now, NO VMs have this tag, so the rule won't do anything yet.
+We'll add the tag to our VM in the next section.
+
+#### Source filter
+
+```
+Source IPv4 ranges: 0.0.0.0/0
+```
+
+**Explanation:**
+- `0.0.0.0/0` means "any IP address on the internet"
+- This allows DNS queries from anywhere
+- This is necessary because we don't know where targets will be
+
+**Security consideration:**
+This is safe because:
+1. Only port 53 is exposed
+2. Evilginx3 has built-in protections
+3. You can add IP restrictions later if needed
+
+#### Source IPv6 ranges
+```
+Leave empty (default)
+```
+
+#### Protocols and ports
+**VERY IMPORTANT - DNS requires BOTH TCP and UDP:**
+
+1. Select radio button: **"Specified protocols and ports"**
+2. You'll see checkboxes for different protocols
+3. Check the box next to **"tcp"**
+4. In the text field next to "tcp", type: `53`
+5. Check the box next to **"udp"**
+6. In the text field next to "udp", type: `53`
+
+**It should look like:**
+```
+☑ tcp: 53
+☑ udp: 53
+☐ Other protocols
+```
+
+**Why both TCP and UDP?**
+- UDP port 53: Standard DNS queries (most common)
+- TCP port 53: Large DNS responses and zone transfers
+- Evilginx3 uses BOTH protocols
+
+#### Final Review
+
+Before clicking "CREATE", verify these settings:
+
+```
+Name: allow-dns
+Network: default
+Priority: 1000
+Direction: Ingress
+Action: Allow
+Targets: Specified target tags → evilgophish
+Source filter: 0.0.0.0/0
+Protocols: tcp:53, udp:53
+```
+
+#### Create the Rule
+
+1. Scroll to the bottom
+2. Click the blue **"CREATE"** button
+3. Wait 5-10 seconds for creation
+
+**Expected result:**
+- You're redirected to the firewall rules list
+- You see `allow-dns` in the list
+- Status shows a green checkmark (✓)
+
+### 4.4 Add Network Tag to VM Instance
+
+**CRITICAL STEP: The firewall rule exists but doesn't apply to any VM yet!**
+
+Now we need to "attach" the tag to our VM so the firewall rule applies.
+
+#### Navigate to VM
+
+1. Click the hamburger menu (top-left)
+2. Go to **"Compute Engine"** → **"VM instances"**
+3. You should see your `evilgophish-server` instance
+4. Click on the instance NAME (not the checkbox, the actual name text)
+
+**Expected:** You're now on the "VM instance details" page showing information about your VM.
+
+#### Enter Edit Mode
+
+1. Look at the top of the page
+2. You'll see buttons: STOP, RESET, DELETE, EDIT
+3. Click **"EDIT"** button
+
+**Expected:**
+- The page reloads in edit mode
+- Most fields now have editable inputs
+- There's a blue "SAVE" button at the bottom
+
+**WARNING:** Don't change any settings except the network tags!
+
+#### Locate Network Tags Field
+
+1. Scroll down the page
+2. Look for a section called **"Network tags"**
+3. It's usually in the middle of the page, after "Network interfaces"
+
+**Visual location:**
+```
+[... other fields ...]
+
+Network interfaces
+  nic0: default (subnet)
+  External IP: 35.xxx.xxx.xxx
+
+Network tags  ← THIS IS WHAT YOU'RE LOOKING FOR
+  [empty text field]
+
+[... more fields ...]
+```
+
+#### Add the Tag
+
+**Current state:**
+```
+Network tags
+  [                    ]  ← Empty field
+```
+
+**What to do:**
+
+1. Click inside the "Network tags" text field
+2. Type: `evilgophish` (all lowercase, no spaces, no special characters)
+3. Press **ENTER** key or **TAB** key
+
+**IMPORTANT:** You MUST press Enter/Tab after typing. If you just type and click away, the tag won't be saved.
+
+**Expected result:**
+```
+Network tags
+  [evilgophish] ×  ← Blue pill with the tag name
+```
+
+You should see a blue bubble/pill with "evilgophish" and a small "×" to remove it.
+
+**Visual confirmation:**
+```
+╔═══════════════════════════════════════╗
+║ Network tags                          ║
+║ ┌───────────────┐                     ║
+║ │ evilgophish × │                     ║
+║ └───────────────┘                     ║
+╚═══════════════════════════════════════╝
+        ↑
+    Blue bubble confirms tag is set
+```
+
+#### Save Changes
+
+**CRITICAL:** You must save or changes are lost!
+
+1. Scroll to the very bottom of the page
+2. Look for the blue **"SAVE"** button
+3. Click **"SAVE"**
+4. Wait 10-20 seconds for the update
+
+**Expected output:**
+```
+Updating evilgophish-server...
+✓ VM instance updated successfully
+```
+
+**Page behavior:**
+- You're redirected back to the VM instance details page (view mode)
+- The page shows the VM is running
+- Network tags section now shows: `evilgophish`
+
+### 4.5 Verify Firewall Configuration
+
+#### Method 1: Check VM Instance Details
+
+1. On the VM instance details page
+2. Scroll to **"Network tags"** section
+3. Verify it shows: `evilgophish`
+
+**What you should see:**
+```
+Network tags
+  evilgophish
+```
+
+#### Method 2: Check Firewall Rules List
+
+1. Go to **"VPC network"** → **"Firewall"**
+2. Find the `allow-dns` rule in the list
+3. Click on it to see details
+4. Under "Targets", verify it shows: `Target tags: evilgophish`
+
+#### Method 3: View Effective Firewall Rules on VM
+
+This shows which firewall rules actually apply to your VM:
 
 1. Go to **"Compute Engine"** → **"VM instances"**
 2. Click on `evilgophish-server`
-3. Click **"EDIT"** at the top
-4. Scroll down to **"Network tags"**
-5. Add tag: `evilgophish`
-6. Click **"SAVE"** at the bottom
+3. Click the **"DETAILS"** tab (if not already selected)
+4. Scroll down to **"Network interfaces"**
+5. Click **"View details"** or **"nic0"**
+6. Look for **"Firewall and routes details"**
+7. Click **"Firewall rules"**
 
-### 4.4 Verify Firewall Rules
+**You should see these rules applying to your VM:**
+```
+✓ default-allow-ssh       tcp:22       (from GCP default)
+✓ default-allow-http      tcp:80       (you checked this box)
+✓ default-allow-https     tcp:443      (you checked this box)
+✓ allow-dns               tcp:53,udp:53 (you created this)
+```
 
-Your VM should now have these firewall rules:
-- `default-allow-http` (port 80) - Created automatically
-- `default-allow-https` (port 443) - Created automatically
-- `allow-dns` (port 53 TCP/UDP) - Created manually
+#### Method 4: Test from Another Machine (Optional)
+
+**Warning:** Only do this AFTER the server is fully configured.
+
+From your local machine:
+```bash
+# Test if port 53 is reachable (after Evilginx3 is running)
+nc -zv YOUR_GCP_EXTERNAL_IP 53
+
+# Expected output:
+Connection to YOUR_GCP_EXTERNAL_IP 53 port [tcp/domain] succeeded!
+```
+
+### 4.6 Summary of Firewall Configuration
+
+**Your VM now has these firewall rules:**
+
+| Rule Name | Ports | Protocol | Source | Purpose |
+|-----------|-------|----------|--------|---------|
+| `default-allow-ssh` | 22 | TCP | 0.0.0.0/0 | SSH access |
+| `default-allow-http` | 80 | TCP | 0.0.0.0/0 | HTTP (redirects to HTTPS) |
+| `default-allow-https` | 443 | TCP | 0.0.0.0/0 | HTTPS phishing traffic |
+| `allow-dns` | 53 | TCP/UDP | 0.0.0.0/0 | DNS for Evilginx3 |
+
+**Network tag on your VM:**
+- `evilgophish` - Links the VM to the `allow-dns` firewall rule
+
+**Why network tags matter:**
+```
+Without tag:
+  Firewall rule exists → Applies to: NOTHING → Port 53: BLOCKED ✗
+
+With tag "evilgophish":
+  Firewall rule exists → Applies to: evilgophish-server → Port 53: OPEN ✓
+```
+
+**Troubleshooting: Tag not applying?**
+
+If the firewall rule doesn't seem to work:
+
+1. **Verify tag on VM:**
+   ```
+   Go to VM → Edit → Network tags shows "evilgophish"
+   ```
+
+2. **Verify tag on firewall rule:**
+   ```
+   Go to Firewall → allow-dns → Target tags shows "evilgophish"
+   ```
+
+3. **Check for typos:**
+   - Tag is case-sensitive
+   - Must be exact: `evilgophish` not `EvilGophish` or `evil-gophish`
+   - Check for extra spaces
+
+4. **Wait for propagation:**
+   - Changes can take 10-30 seconds
+   - Refresh the page and check again
+
+5. **Re-save if needed:**
+   - Go to VM → Edit
+   - Remove tag (click the × on the blue bubble)
+   - Add tag again: `evilgophish`
+   - Press Enter
+   - Click SAVE
 
 ---
 
